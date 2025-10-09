@@ -1,0 +1,44 @@
+# mdexec.policy.yaml (pragmatic defaults)
+whitelist_languages: ["bash","sh","python","node","deno","go","php","ruby","perl","pwsh","make"]
+
+blacklist_patterns:
+  - pattern: "\\brm\\s+-rf\\s+/"
+    score: 9
+    reason: "Destructive recursive delete of root"
+  - pattern: "curl\\s+.*\\|\\s*sh"
+    score: 9
+    reason: "Piping remote script to shell"
+  - pattern: "\\bsudo\\b"
+    score: 5
+    reason: "Elevated privileges"
+  - pattern: "\\bdd\\s+if="
+    score: 9
+    reason: "Raw device write"
+  - pattern: "(apt-get|yum|brew|pacman)\\s+install"
+    score: 4
+    reason: "Package install (system change, network)"
+  - pattern: "docker\\s+run.*-v\\s+/"
+    score: 9
+    reason: "Docker bind-mount of root"
+  - pattern: "systemctl\\b|service\\b|reboot\\b|poweroff\\b"
+    score: 8
+    reason: "Service / system management"
+  - pattern: "chown\\s+(-R\\s+)?\\S+\\s+/"
+    score: 6
+    reason: "Ownership change on root"
+  - pattern: "chmod\\s+0?0?0"
+    score: 5
+    reason: "Overly permissive chmod"
+
+thresholds:
+  low_max: 2
+  med_max: 5
+  high_min: 6
+
+default_sandbox:
+  engine: "docker"        # or "podman"
+  image: "ubuntu:22.04"
+  network: "none"         # none|restricted|full
+  workspace_rw: true
+
+confirm_for: "high"

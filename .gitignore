@@ -1,0 +1,12 @@
+.mdexec/
+dist/
+bin/
+**/*.swp
+*.log
+*.out
+*.exe
+*.dll
+*.so
+*.dylib
+.DS_Store
+main

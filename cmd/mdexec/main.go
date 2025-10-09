@@ -1,0 +1,492 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/SimonWaldherr/mdexec/internal/executor"
+	"github.com/SimonWaldherr/mdexec/internal/graph"
+	"github.com/SimonWaldherr/mdexec/internal/markdown"
+	"github.com/SimonWaldherr/mdexec/internal/policy"
+	"github.com/SimonWaldherr/mdexec/internal/task"
+	"github.com/SimonWaldherr/mdexec/internal/ui"
+	"github.com/spf13/cobra"
+)
+
+var (
+	flagIncludeAll   bool
+	flagYes          bool
+	flagDryRun       bool
+	flagVerbosity    int
+	flagEngine       string
+	flagImage        string
+	flagUnder        string
+	flagLang         string
+	flagTags         string
+	flagNames        string
+	flagMatch        string
+	flagTimeout      int
+	flagAllow        string
+	flagPolicy       string
+	flagUseContainer bool
+	flagPassEnv      []string
+	flagVars         []string
+	flagTail         int
+)
+
+func main() {
+	root := &cobra.Command{
+		Use:   "mdexec",
+		Short: "Execute runnable code blocks from Markdown",
+		Long:  "Parse Markdown headings, discover runnable code fences, preview, plan, and execute with simple policy and containerization.",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// if neither --yes nor --dry-run set: default to dry-run
+			if !flagYes && !flagDryRun {
+				flagDryRun = true
+			}
+			flagAllow = strings.ToLower(flagAllow)
+			if flagAllow == "" {
+				flagAllow = "low"
+			}
+			return nil
+		},
+	}
+	root.PersistentFlags().BoolVar(&flagIncludeAll, "include-all", false, "Treat all fenced blocks in whitelisted languages as candidates (even without mdexec tag)")
+	root.PersistentFlags().BoolVarP(&flagYes, "yes", "y", false, "Actually execute (otherwise dry-run)")
+	root.PersistentFlags().BoolVar(&flagDryRun, "dry-run", false, "Dry-run (preview mode)")
+	root.PersistentFlags().IntVarP(&flagVerbosity, "verbosity", "v", 1, "Verbosity 0..3")
+	root.PersistentFlags().StringVar(&flagEngine, "engine", "", "Container engine (docker|podman)")
+	root.PersistentFlags().StringVar(&flagImage, "container", "", "Container image to run inside")
+	root.PersistentFlags().BoolVar(&flagUseContainer, "use-container", false, "Prefer running inside containers using policy defaults")
+	root.PersistentFlags().StringSliceVar(&flagPassEnv, "pass-env", []string{"CI", "HOME"}, "Env vars to pass into container")
+	root.PersistentFlags().StringSliceVar(&flagVars, "var", nil, "Set variable KEY=VALUE (replaces {{KEY}} and exports to env)")
+	root.PersistentFlags().IntVar(&flagTail, "tail", 5, "Number of lines to show in TUI output tail")
+
+	// Common filter flags
+	addFilterFlags := func(c *cobra.Command) {
+		c.Flags().StringVar(&flagUnder, "under", "", "Limit to tasks under heading path, e.g., 'Setup/Install'")
+		c.Flags().StringVar(&flagLang, "lang", "", "Filter by language")
+		c.Flags().StringVar(&flagTags, "tags", "", "Filter by comma-separated tags")
+		c.Flags().StringVar(&flagNames, "names", "", "Limit to specific task names (comma-separated)")
+		c.Flags().StringVar(&flagMatch, "match", "", "Regex to match task name or path")
+		c.Flags().IntVar(&flagTimeout, "timeout", 0, "Default timeout seconds")
+		c.Flags().StringVar(&flagAllow, "allow", "", "Allow execution up to risk level (low|medium|high)")
+		c.Flags().StringVar(&flagPolicy, "policy", "", "Path to mdexec.policy.yaml (optional)")
+	}
+
+	listCmd := &cobra.Command{
+		Use:   "list <markdown>",
+		Short: "List runnable tasks",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			md := args[0]
+			return withIndex(md, func(idx *task.Index, pol *policy.Policy) error {
+				selection, err := selectTasks(idx, pol)
+				if err != nil {
+				 return err
+				}
+				task.SortByPathThenName(selection)
+				fmt.Print(task.FormatTable(selection))
+				return nil
+			})
+		},
+	}
+	addFilterFlags(listCmd)
+	root.AddCommand(listCmd)
+
+	showCmd := &cobra.Command{
+		Use:   "show <markdown> --name <task>",
+		Short: "Show code of a task",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			md := args[0]
+			name, _ := cmd.Flags().GetString("name")
+			if name == "" {
+				return fmt.Errorf("--name required")
+			}
+			return withIndex(md, func(idx *task.Index, pol *policy.Policy) error {
+				t, ok := idx.ByName[name]
+				if !ok {
+					return fmt.Errorf("task '%s' not found", name)
+				}
+				header := "```" + t.Lang + " mdexec"
+				// rebuild info string (approximate)
+				var parts []string
+				for k, v := range t.Info {
+					if strings.ToLower(k) == "mdexec" {
+						continue
+					}
+					parts = append(parts, fmt.Sprintf("%s=%s", k, v))
+				}
+				if len(parts) > 0 {
+					header = "```" + t.Lang + " " + strings.Join(parts, " ") + " mdexec"
+				}
+				fmt.Println(header)
+				fmt.Println(t.Code)
+				fmt.Println("```")
+				return nil
+			})
+		},
+	}
+	showCmd.Flags().String("name", "", "Task name to show")
+	addFilterFlags(showCmd)
+	root.AddCommand(showCmd)
+
+	planCmd := &cobra.Command{
+		Use:   "plan <markdown>",
+		Short: "Show execution plan (topo order incl. deps)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			md := args[0]
+			graphOut, _ := cmd.Flags().GetString("graph")
+			return withIndex(md, func(idx *task.Index, pol *policy.Policy) error {
+				selection, err := selectTasks(idx, pol)
+				if err != nil {
+					return err
+				}
+				order, err := idx.TopoSort(selection)
+				if err != nil {
+					return err
+				}
+				for i, t := range order {
+					fmt.Printf("%02d. %s  deps=[%s]\n", i+1, t.Label(), strings.Join(t.Deps, ", "))
+				}
+				if graphOut != "" {
+					if err := graph.WriteDOT(order, graphOut); err != nil {
+						return err
+					}
+					fmt.Println("Wrote graph to:", graphOut)
+				}
+				return nil
+			})
+		},
+	}
+	planCmd.Flags().String("graph", "", "Write DOT graph to this path")
+	addFilterFlags(planCmd)
+	root.AddCommand(planCmd)
+
+	runCmd := &cobra.Command{
+		Use:   "run <markdown>",
+		Short: "Execute tasks (dry-run by default)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			md := args[0]
+			return withIndex(md, func(idx *task.Index, pol *policy.Policy) error {
+				selection, err := selectTasks(idx, pol)
+				if err != nil {
+					return err
+				}
+				order, err := idx.TopoSort(selection)
+				if err != nil {
+					return err
+				}
+				vars := parseVars(flagVars)
+				opts := executor.Options{
+					Timeout:      time.Duration(flagTimeout) * time.Second,
+					Engine:       flagEngine,
+					Image:        flagImage,
+					PassEnv:      flagPassEnv,
+					DryRun:       flagDryRun,
+					Verbosity:    flagVerbosity,
+					AllowLevel:   parseAllow(flagAllow),
+					IncludeAll:   flagIncludeAll,
+					UseContainer: flagUseContainer || flagImage != "" || flagEngine != "",
+				}
+				ctx := context.Background()
+				failures := 0
+				for _, t := range order {
+					// risk check
+					score, reasons := pol.Score(t.Code)
+					t.RiskScore = score
+					t.RiskReasons = reasons
+					risk := pol.Risk(score)
+					if !isAllowed(risk, opts.AllowLevel) {
+						if flagYes {
+							// still require explicit allow via flag
+								return fmt.Errorf("task '%s' risk %s exceeds allowed level '%s' (use --allow %s)", t.Name, risk, opts.AllowLevel, risk)
+						}
+						// dry-run fallback or require confirmation
+						fmt.Printf("[blocked] %s: risk %s (%v). Increase --allow or run with --yes.\n", t.Label(), risk, strings.Join(reasons, "; "))
+						continue
+					}
+					rc, out, errout, err := executor.RunTask(ctx, t, pol, vars, opts)
+					if err != nil {
+						return err
+					}
+					if len(out) > 0 {
+						fmt.Print(out)
+					}
+					if len(errout) > 0 {
+						fmt.Fprint(os.Stderr, errout)
+					}
+					if rc != 0 {
+						failures++
+						if !t.Continue {
+							fmt.Fprintf(os.Stderr, "[stop] task '%s' failed with exit code %d\n", t.Name, rc)
+							break
+						}
+					}
+				}
+				if opts.DryRun {
+					fmt.Println("Dry-run complete. Use --yes to execute.")
+				} else if failures > 0 {
+					fmt.Fprintf(os.Stderr, "Run finished with %d failure(s).\n", failures)
+				} else {
+					fmt.Println("All tasks completed successfully.")
+				}
+				return nil
+			})
+		},
+	}
+	addFilterFlags(runCmd)
+	root.AddCommand(runCmd)
+
+	tuiCmd := &cobra.Command{
+		Use:   "tui <markdown>",
+		Short: "Interactive TUI (requires tview/tcell)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			md := args[0]
+			var idx *task.Index
+			var pol *policy.Policy
+			var err error
+			if err = withIndex(md, func(i *task.Index, p *policy.Policy) error {
+				idx, pol = i, p
+				return nil
+			}); err != nil {
+				return err
+			}
+			listFn := func() []task.Task {
+				selection, _ := selectTasks(idx, pol)
+				return selection
+			}
+			// Helper that runs specified task names and returns combined output.
+			runAndCapture := func(names []string) (string, error) {
+				flagNames = strings.Join(names, ",")
+				// when invoked from TUI, explicitly run (not dry-run)
+				prevYes, prevDry := flagYes, flagDryRun
+				flagYes = true
+				flagDryRun = false
+				defer func() { flagYes, flagDryRun = prevYes, prevDry }()
+
+				// capture output into buffer
+				var outBuilder strings.Builder
+				// call the same logic as run command but in-process to capture outputs
+				err := withIndex(md, func(idx *task.Index, pol *policy.Policy) error {
+					selection, err := selectTasks(idx, pol)
+					if err != nil {
+						return err
+					}
+					order, err := idx.TopoSort(selection)
+					if err != nil {
+						return err
+					}
+					vars := parseVars(flagVars)
+					opts := executor.Options{
+						Timeout:      time.Duration(flagTimeout) * time.Second,
+						Engine:       flagEngine,
+						Image:        flagImage,
+						PassEnv:      flagPassEnv,
+						DryRun:       flagDryRun,
+						Verbosity:    flagVerbosity,
+						AllowLevel:   parseAllow(flagAllow),
+						IncludeAll:   flagIncludeAll,
+						UseContainer: flagUseContainer || flagImage != "" || flagEngine != "",
+					}
+					ctx := context.Background()
+					failures := 0
+					for _, t := range order {
+						// skip tasks not in names if names specified
+						if len(names) > 0 {
+							found := false
+							for _, n := range strings.Split(flagNames, ",") {
+								if strings.TrimSpace(n) == t.Name {
+									found = true
+									break
+								}
+							}
+							if !found {
+								continue
+							}
+						}
+						score, reasons := pol.Score(t.Code)
+						t.RiskScore = score
+						t.RiskReasons = reasons
+						risk := pol.Risk(score)
+						if !isAllowed(risk, opts.AllowLevel) {
+							if flagYes {
+								return fmt.Errorf("task '%s' risk %s exceeds allowed level '%s' (use --allow %s)", t.Name, risk, opts.AllowLevel, risk)
+							}
+							outBuilder.WriteString(fmt.Sprintf("[blocked] %s: risk %s (%v). Increase --allow or run with --yes.\n", t.Label(), risk, strings.Join(reasons, "; ")))
+							continue
+						}
+						rc, out, errout, err := executor.RunTask(ctx, t, pol, vars, opts)
+						if err != nil {
+							return err
+						}
+						if len(out) > 0 {
+							outBuilder.WriteString(out)
+						}
+						if len(errout) > 0 {
+							outBuilder.WriteString(errout)
+						}
+						if rc != 0 {
+							failures++;
+							if !t.Continue {
+								outBuilder.WriteString(fmt.Sprintf("[stop] task '%s' failed with exit code %d\n", t.Name, rc))
+								break
+							}
+						}
+					}
+					if opts.DryRun {
+						outBuilder.WriteString("Dry-run complete. Use --yes to execute.\n")
+					} else if failures > 0 {
+						outBuilder.WriteString(fmt.Sprintf("Run finished with %d failure(s).\n", failures))
+					} else {
+						outBuilder.WriteString("All tasks completed successfully.\n")
+					}
+					return nil
+				})
+				return outBuilder.String(), err
+			}
+
+			runFn := func(names []string) (string, error) {
+				// return captured output to the TUI which will display it
+				out, err := runAndCapture(names)
+				return out, err
+			}
+			filterFn := func(under string, tags []string) []task.Task {
+				flagUnder = under
+				flagTags = strings.Join(tags, ",")
+				selection, _ := selectTasks(idx, pol)
+				return selection
+			}
+			return ui.RunTUI(listFn, ui.TUIOptions{Run: runFn, Filter: filterFn, TailLines: flagTail})
+		},
+	}
+	addFilterFlags(tuiCmd)
+	root.AddCommand(tuiCmd)
+
+	configCmd := &cobra.Command{
+		Use:   "config <markdown>",
+		Short: "Show loaded policy/config",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			md := args[0]
+			pol, err := policy.Load(md, defaultPolicyPath())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Policy: %+v\n", *pol)
+			return nil
+		},
+	}
+	root.AddCommand(configCmd)
+
+	if err := root.Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func withIndex(md string, fn func(*task.Index, *policy.Policy) error) error {
+	abs, _ := filepath.Abs(md)
+	pol, err := policy.Load(abs, defaultPolicyPath())
+	if err != nil {
+		return err
+	}
+	// If the input filename indicates a 'nomarker' sample (e.g. README.nomarker.md),
+	// treat it as if --include-all was passed so code fences without an explicit
+	// mdexec tag are considered runnable.
+	includeAll := flagIncludeAll
+	if strings.Contains(strings.ToLower(filepath.Base(abs)), ".nomarker") {
+		includeAll = true
+	}
+	tasks, err := markdown.ParseMarkdown(abs, includeAll)
+	if err != nil {
+		return err
+	}
+	// Filter by whitelist
+	var filtered []task.Task
+	for _, t := range tasks {
+		if pol.IsWhitelisted(t.Lang) {
+			filtered = append(filtered, t)
+		}
+	}
+	idx := task.NewIndex(filtered)
+	return fn(idx, pol)
+}
+
+func selectTasks(idx *task.Index, pol *policy.Policy) ([]task.Task, error) {
+	var names []string
+	if flagNames != "" {
+		names = splitCSV(flagNames)
+	}
+	var tags []string
+	if flagTags != "" {
+		tags = splitCSV(flagTags)
+	}
+	var rx *regexp.Regexp
+	if flagMatch != "" {
+		rx = regexp.MustCompile(flagMatch)
+	}
+	selection := idx.Filter(task.Filter{
+		Names: names,
+		Under: flagUnder,
+		Lang:  flagLang,
+		Tags:  tags,
+		Regex: rx,
+	})
+	return selection, nil
+}
+
+func parseVars(kvs []string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range kvs {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		out[parts[0]] = parts[1]
+	}
+	return out
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if q := strings.TrimSpace(p); q != "" {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+func parseAllow(s string) policy.RiskLevel {
+	switch strings.ToLower(s) {
+	case "high":
+		return policy.RiskHigh
+	case "medium":
+		return policy.RiskMedium
+	default:
+		return policy.RiskLow
+	}
+}
+
+func isAllowed(risk, allow policy.RiskLevel) bool {
+	order := map[policy.RiskLevel]int{policy.RiskLow: 1, policy.RiskMedium: 2, policy.RiskHigh: 3}
+	return order[risk] <= order[allow]
+}
+
+func defaultPolicyPath() string {
+	wd, _ := os.Getwd()
+	return filepath.Join(wd, "policy", "mdexec.policy.yaml")
+}
