@@ -50,8 +50,9 @@ type Options struct {
 	UseContainer bool
 }
 
+var varRe = regexp.MustCompile(`\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}`)
+
 func replaceVars(s string, vars map[string]string) string {
-	varRe := regexpVar()
 	return varRe.ReplaceAllStringFunc(s, func(m string) string {
 		key := varRe.FindStringSubmatch(m)[1]
 		if val, ok := vars[key]; ok {
@@ -62,16 +63,6 @@ func replaceVars(s string, vars map[string]string) string {
 		}
 		return m
 	})
-}
-
-var _varRe *regexp.Regexp
-
-func regexpVar() *regexp.Regexp {
-	if _varRe != nil {
-		return _varRe
-	}
-	_varRe = regexp.MustCompile(`\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}`)
-	return _varRe
 }
 
 func ensureTmpFile(workdir, ext string) (string, error) {

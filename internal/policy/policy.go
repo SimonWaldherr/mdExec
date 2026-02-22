@@ -18,24 +18,24 @@ type Rule struct {
 }
 
 type Thresholds struct {
-	LowMax int `yaml:"low_max" json:"low_max"`
-	MedMax int `yaml:"med_max" json:"med_max"`
+	LowMax  int `yaml:"low_max" json:"low_max"`
+	MedMax  int `yaml:"med_max" json:"med_max"`
 	HighMin int `yaml:"high_min" json:"high_min"`
 }
 
 type Sandbox struct {
-	Engine      string `yaml:"engine" json:"engine"`   // docker|podman
+	Engine      string `yaml:"engine" json:"engine"` // docker|podman
 	Image       string `yaml:"image" json:"image"`
 	Network     string `yaml:"network" json:"network"` // none|restricted|full
 	WorkspaceRW bool   `yaml:"workspace_rw" json:"workspace_rw"`
 }
 
 type Policy struct {
-	WhitelistLanguages []string `yaml:"whitelist_languages" json:"whitelist_languages"`
-	BlacklistPatterns  []Rule   `yaml:"blacklist_patterns" json:"blacklist_patterns"`
-	Thresholds         Thresholds `yaml:"thresholds" json:"thresholds"`
-	DefaultSandbox     Sandbox   `yaml:"default_sandbox" json:"default_sandbox"`
-	ConfirmFor         string    `yaml:"confirm_for" json:"confirm_for"` // "high"|"medium"|""
+	WhitelistLanguages []string   `yaml:"whitelist_languages" json:"whitelist_languages"`
+	BlacklistPatterns  []Rule     `yaml:"blacklist_patterns"  json:"blacklist_patterns"`
+	Thresholds         Thresholds `yaml:"thresholds"          json:"thresholds"`
+	DefaultSandbox     Sandbox    `yaml:"default_sandbox"     json:"default_sandbox"`
+	ConfirmFor         string     `yaml:"confirm_for"         json:"confirm_for"` // "high"|"medium"|""
 }
 
 // Load policy by walking up from the markdown path; fallback to provided defaultPath; else built-in defaults.
@@ -67,7 +67,12 @@ func Load(markdownPath string, defaultPath string) (*Policy, error) {
 			_ = yaml.Unmarshal(b, pol)
 		}
 	}
-	// compile regex
+	compilePatterns(pol)
+	return pol, nil
+}
+
+// compilePatterns compiles the regexp for each blacklist rule in place.
+func compilePatterns(pol *Policy) {
 	for i := range pol.BlacklistPatterns {
 		rx := pol.BlacklistPatterns[i].Pattern
 		if rx == "" {
@@ -78,28 +83,33 @@ func Load(markdownPath string, defaultPath string) (*Policy, error) {
 			pol.BlacklistPatterns[i].re = re
 		}
 	}
-	return pol, nil
 }
 
 func Default() *Policy {
-	return &Policy{
-		WhitelistLanguages: []string{"bash","sh","python","node","deno","go","php","ruby","perl","pwsh","make"},
+	pol := &Policy{
+		WhitelistLanguages: []string{
+			"bash", "sh", "python", "node", "deno",
+			"go", "php", "ruby", "perl", "pwsh", "make",
+		},
 		BlacklistPatterns: []Rule{
 			{Pattern: "\\brm\\s+-rf\\s+/", Score: 9, Reason: "Destructive recursive delete of root"},
 			{Pattern: "curl\\s+.*\\|\\s*sh", Score: 9, Reason: "Piping remote script to shell"},
 			{Pattern: "\\bsudo\\b", Score: 5, Reason: "Elevated privileges"},
 		},
-		Thresholds: Thresholds{LowMax: 2, MedMax: 5, HighMin: 6},
+		Thresholds:     Thresholds{LowMax: 2, MedMax: 5, HighMin: 6},
 		DefaultSandbox: Sandbox{Engine: "docker", Image: "ubuntu:22.04", Network: "none", WorkspaceRW: true},
-		ConfirmFor: "high",
+		ConfirmFor:     "high",
 	}
+	compilePatterns(pol)
+	return pol
 }
 
 type RiskLevel string
+
 const (
-	RiskLow RiskLevel = "low"
+	RiskLow    RiskLevel = "low"
 	RiskMedium RiskLevel = "medium"
-	RiskHigh RiskLevel = "high"
+	RiskHigh   RiskLevel = "high"
 )
 
 func (p *Policy) Score(code string) (int, []string) {
