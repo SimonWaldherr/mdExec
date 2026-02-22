@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/SimonWaldherr/mdexec/internal/task"
@@ -14,12 +15,12 @@ var (
 	fenceStart = regexp.MustCompile("^```(\\S+)(?:\\s+(.*))?$")
 	fenceEnd   = regexp.MustCompile("^```\\s*$")
 	headingRe  = regexp.MustCompile("^(#{1,6})\\s+(.*)$")
+	slugRe     = regexp.MustCompile(`[^a-z0-9]+`)
 )
 
 func slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
-	re := regexp.MustCompile(`[^a-z0-9]+`)
-	s = re.ReplaceAllString(s, "-")
+	s = slugRe.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
 	if s == "" {
 		return "unnamed"
@@ -191,7 +192,9 @@ func ParseMarkdown(path string, includeAll bool) ([]task.Task, error) {
 						strings.EqualFold(taskMeta["continue"], "on")
 					timeout := 0
 					if ts := strings.TrimSpace(taskMeta["timeout"]); ts != "" {
-						_, _ = fmtSscanf(ts, &timeout)
+						if n, err := strconv.Atoi(ts); err == nil && n > 0 {
+							timeout = n
+						}
 					}
 					var heading []string
 					for _, h := range stack {
@@ -245,16 +248,4 @@ func ParseMarkdown(path string, includeAll bool) ([]task.Task, error) {
 		}
 	}
 	return tasks, nil
-}
-
-func fmtSscanf(s string, out *int) (int, error) {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			break
-		}
-		n = n*10 + int(c-'0')
-	}
-	*out = n
-	return 1, nil
 }

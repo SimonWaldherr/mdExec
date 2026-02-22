@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -88,7 +89,7 @@ func main() {
 			return withIndex(md, func(idx *task.Index, pol *policy.Policy) error {
 				selection, err := selectTasks(idx, pol)
 				if err != nil {
-				 return err
+					return err
 				}
 				task.SortByPathThenName(selection)
 				fmt.Print(task.FormatTable(selection))
@@ -198,39 +199,9 @@ func main() {
 					UseContainer: flagUseContainer || flagImage != "" || flagEngine != "",
 				}
 				ctx := context.Background()
-				failures := 0
-				for _, t := range order {
-					// risk check
-					score, reasons := pol.Score(t.Code)
-					t.RiskScore = score
-					t.RiskReasons = reasons
-					risk := pol.Risk(score)
-					if !isAllowed(risk, opts.AllowLevel) {
-						if flagYes {
-							// still require explicit allow via flag
-								return fmt.Errorf("task '%s' risk %s exceeds allowed level '%s' (use --allow %s)", t.Name, risk, opts.AllowLevel, risk)
-						}
-						// dry-run fallback or require confirmation
-						fmt.Printf("[blocked] %s: risk %s (%v). Increase --allow or run with --yes.\n", t.Label(), risk, strings.Join(reasons, "; "))
-						continue
-					}
-					rc, out, errout, err := executor.RunTask(ctx, t, pol, vars, opts)
-					if err != nil {
-						return err
-					}
-					if len(out) > 0 {
-						fmt.Print(out)
-					}
-					if len(errout) > 0 {
-						fmt.Fprint(os.Stderr, errout)
-					}
-					if rc != 0 {
-						failures++
-						if !t.Continue {
-							fmt.Fprintf(os.Stderr, "[stop] task '%s' failed with exit code %d\n", t.Name, rc)
-							break
-						}
-					}
+				failures, err := executeTaskOrder(ctx, order, pol, vars, opts, flagYes, os.Stdout, os.Stderr)
+				if err != nil {
+					return err
 				}
 				if opts.DryRun {
 					fmt.Println("Dry-run complete. Use --yes to execute.")
@@ -274,9 +245,7 @@ func main() {
 				flagDryRun = false
 				defer func() { flagYes, flagDryRun = prevYes, prevDry }()
 
-				// capture output into buffer
 				var outBuilder strings.Builder
-				// call the same logic as run command but in-process to capture outputs
 				err := withIndex(md, func(idx *task.Index, pol *policy.Policy) error {
 					selection, err := selectTasks(idx, pol)
 					if err != nil {
@@ -298,50 +267,9 @@ func main() {
 						IncludeAll:   flagIncludeAll,
 						UseContainer: flagUseContainer || flagImage != "" || flagEngine != "",
 					}
-					ctx := context.Background()
-					failures := 0
-					for _, t := range order {
-						// skip tasks not in names if names specified
-						if len(names) > 0 {
-							found := false
-							for _, n := range strings.Split(flagNames, ",") {
-								if strings.TrimSpace(n) == t.Name {
-									found = true
-									break
-								}
-							}
-							if !found {
-								continue
-							}
-						}
-						score, reasons := pol.Score(t.Code)
-						t.RiskScore = score
-						t.RiskReasons = reasons
-						risk := pol.Risk(score)
-						if !isAllowed(risk, opts.AllowLevel) {
-							if flagYes {
-								return fmt.Errorf("task '%s' risk %s exceeds allowed level '%s' (use --allow %s)", t.Name, risk, opts.AllowLevel, risk)
-							}
-							outBuilder.WriteString(fmt.Sprintf("[blocked] %s: risk %s (%v). Increase --allow or run with --yes.\n", t.Label(), risk, strings.Join(reasons, "; ")))
-							continue
-						}
-						rc, out, errout, err := executor.RunTask(ctx, t, pol, vars, opts)
-						if err != nil {
-							return err
-						}
-						if len(out) > 0 {
-							outBuilder.WriteString(out)
-						}
-						if len(errout) > 0 {
-							outBuilder.WriteString(errout)
-						}
-						if rc != 0 {
-							failures++;
-							if !t.Continue {
-								outBuilder.WriteString(fmt.Sprintf("[stop] task '%s' failed with exit code %d\n", t.Name, rc))
-								break
-							}
-						}
+					failures, err := executeTaskOrder(context.Background(), order, pol, vars, opts, true, &outBuilder, &outBuilder)
+					if err != nil {
+						return err
 					}
 					if opts.DryRun {
 						outBuilder.WriteString("Dry-run complete. Use --yes to execute.\n")
@@ -354,19 +282,13 @@ func main() {
 				})
 				return outBuilder.String(), err
 			}
-
-			runFn := func(names []string) (string, error) {
-				// return captured output to the TUI which will display it
-				out, err := runAndCapture(names)
-				return out, err
-			}
 			filterFn := func(under string, tags []string) []task.Task {
 				flagUnder = under
 				flagTags = strings.Join(tags, ",")
 				selection, _ := selectTasks(idx, pol)
 				return selection
 			}
-			return ui.RunTUI(listFn, ui.TUIOptions{Run: runFn, Filter: filterFn, TailLines: flagTail})
+			return ui.RunTUI(listFn, ui.TUIOptions{Run: runAndCapture, Filter: filterFn, TailLines: flagTail})
 		},
 	}
 	addFilterFlags(tuiCmd)
@@ -484,6 +406,43 @@ func parseAllow(s string) policy.RiskLevel {
 func isAllowed(risk, allow policy.RiskLevel) bool {
 	order := map[policy.RiskLevel]int{policy.RiskLow: 1, policy.RiskMedium: 2, policy.RiskHigh: 3}
 	return order[risk] <= order[allow]
+}
+
+// executeTaskOrder runs tasks in the given order, writing stdout to out and stderr to errOut.
+// It returns the number of tasks that exited non-zero.
+func executeTaskOrder(ctx context.Context, order []*task.Task, pol *policy.Policy, vars map[string]string, opts executor.Options, yes bool, out, errOut io.Writer) (int, error) {
+	failures := 0
+	for _, t := range order {
+		score, reasons := pol.Score(t.Code)
+		t.RiskScore = score
+		t.RiskReasons = reasons
+		risk := pol.Risk(score)
+		if !isAllowed(risk, opts.AllowLevel) {
+			if yes {
+				return failures, fmt.Errorf("task '%s' risk %s exceeds allowed level '%s' (use --allow %s)", t.Name, risk, opts.AllowLevel, risk)
+			}
+			fmt.Fprintf(out, "[blocked] %s: risk %s (%v). Increase --allow or run with --yes.\n", t.Label(), risk, strings.Join(reasons, "; "))
+			continue
+		}
+		rc, stdout, stderr, err := executor.RunTask(ctx, t, pol, vars, opts)
+		if err != nil {
+			return failures, err
+		}
+		if len(stdout) > 0 {
+			fmt.Fprint(out, stdout)
+		}
+		if len(stderr) > 0 {
+			fmt.Fprint(errOut, stderr)
+		}
+		if rc != 0 {
+			failures++
+			if !t.Continue {
+				fmt.Fprintf(errOut, "[stop] task '%s' failed with exit code %d\n", t.Name, rc)
+				break
+			}
+		}
+	}
+	return failures, nil
 }
 
 func defaultPolicyPath() string {

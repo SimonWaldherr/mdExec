@@ -16,8 +16,8 @@ import (
 )
 
 type TUIOptions struct {
-	Run    func(names []string) (string, error)
-	Filter func(under string, tags []string) []task.Task
+	Run       func(names []string) (string, error)
+	Filter    func(under string, tags []string) []task.Task
 	TailLines int
 }
 
@@ -48,12 +48,12 @@ func RunTUI(listTasks func() []task.Task, opts TUIOptions) error {
 	// live-tail settings: keep last N lines in memory and write full output to a temp file
 
 	type runOutputState struct {
-		mu      sync.Mutex
-		lines   []string // last N lines (tail)
-		leftover string  // incomplete line fragment
-		file    *os.File // temp file storing full output
-		tmpPath string
-		total   int
+		mu       sync.Mutex
+		lines    []string // last N lines (tail)
+		leftover string   // incomplete line fragment
+		file     *os.File // temp file storing full output
+		tmpPath  string
+		total    int
 	}
 
 	var currentRun *runOutputState
@@ -345,9 +345,9 @@ func RunTUI(listTasks func() []task.Task, opts TUIOptions) error {
 				for _, line := range parts {
 					rs.total++
 					rs.lines = append(rs.lines, line)
-						if len(rs.lines) > tailLinesLocal {
-							rs.lines = rs.lines[len(rs.lines)-tailLinesLocal:]
-						}
+					if len(rs.lines) > tailLinesLocal {
+						rs.lines = rs.lines[len(rs.lines)-tailLinesLocal:]
+					}
 				}
 				rs.mu.Unlock()
 				showTail()
@@ -398,11 +398,11 @@ func RunTUI(listTasks func() []task.Task, opts TUIOptions) error {
 		case ' ':
 			node := tree.GetCurrentNode()
 			if node == nil {
-			 return nil
+				return nil
 			}
 			ref := node.GetReference()
 			if ref == nil {
-			 return nil
+				return nil
 			}
 			if tp, ok := ref.(*task.Task); ok {
 				selected[tp.Name] = !selected[tp.Name]
