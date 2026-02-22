@@ -8,6 +8,30 @@ This README doubles as a demo: you can clone, build, and even use mdexec to rebu
 
 mdexec parses Markdown files, discovers runnable code fences, and lets you preview, plan, and execute them safely. It understands headings as a hierarchy, supports task metadata (name, deps, tags, dir, shell, timeout, continue), scores risk via simple policies, and can run tasks locally or inside a container.
 
+## Why mdexec?
+
+Most project documentation tells you to run scripts you haven't read. The classic `curl https://example.com/install.sh | bash` pattern gives you zero visibility into what will happen on your machine before it happens. mdexec inverts this: **the documentation _is_ the script**, version-controlled, human-readable, and reviewed before any code runs.
+
+### The problem with `curl | bash`
+
+| Concern | `curl URL \| bash` | mdexec |
+|---|---|---|
+| **See what runs** | No — blind execution | Yes — code is in the Markdown you just read |
+| **Dry-run first** | No | Yes — default mode; `--yes` required to execute |
+| **Risk scoring** | None | Policy-based scoring; dangerous patterns are flagged |
+| **Dependency order** | Manual / fragile | Declared with `deps=`, plan built automatically |
+| **Reproducibility** | Fetches latest at runtime | Script lives in version-controlled Markdown |
+| **Auditability** | Hard — remote URL changes silently | Code diff is a normal `git diff` |
+| **Isolation** | Runs directly on host | Optional Docker/Podman sandbox with `--use-container` |
+
+### When mdexec shines
+
+- **Runbooks and incident playbooks** — ops steps live next to the prose that explains them; an engineer runs only the relevant section.
+- **Project setup guides** — `README.md` _is_ the installer; no separate `install.sh` that drifts out of date.
+- **CI task definitions** — lightweight alternative to full pipeline DSLs for repositories that just need a few scripted steps.
+- **Teaching and demos** — learners read the explanation, inspect the code fence, then execute it with confidence.
+- **Multi-language workflows** — mix bash, Python, Go, and Node tasks in one file with shared variables and dependency ordering.
+
 ### Features
 
 - Discover and run code fences from Markdown (by tag or include-all)
