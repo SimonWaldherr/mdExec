@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const defaultEndpoint = "http://localhost:11434/api/chat"
+const (
+	defaultEndpoint = "http://localhost:11434/api/chat"
+	maxResponseSize = 1 << 20
+)
 
 type Options struct {
 	Enabled  bool
@@ -151,7 +154,7 @@ func postJSON(ctx context.Context, endpoint string, payload any) ([]byte, error)
 		return nil, fmt.Errorf("call AI safety service: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, err
 	}

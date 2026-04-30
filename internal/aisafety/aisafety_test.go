@@ -80,7 +80,9 @@ func TestCheckOpenAICompatible(t *testing.T) {
 			t.Errorf("missing prompt in request: %+v", req)
 			return
 		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"safe\":true,\"reason\":\"echo only\"}"}}]}`))
+		if _, err := w.Write([]byte(`{"choices":[{"message":{"content":"{\"safe\":true,\"reason\":\"echo only\"}"}}]}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 
@@ -103,7 +105,9 @@ func TestCheckOllama(t *testing.T) {
 			t.Errorf("path = %s, want /api/chat", r.URL.Path)
 			return
 		}
-		_, _ = w.Write([]byte(`{"message":{"content":"{\"safe\":false,\"reason\":\"destructive delete\"}"}}`))
+		if _, err := w.Write([]byte(`{"message":{"content":"{\"safe\":false,\"reason\":\"destructive delete\"}"}}`)); err != nil {
+			t.Errorf("write response: %v", err)
+		}
 	}))
 	defer server.Close()
 
