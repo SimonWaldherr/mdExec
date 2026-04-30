@@ -51,7 +51,7 @@ func TestIsOllamaEndpoint(t *testing.T) {
 	}
 	for _, tc := range tests {
 		if got := isOllamaEndpoint(tc.endpoint); got != tc.want {
-			t.Fatalf("isOllamaEndpoint(%q) = %v, want %v", tc.endpoint, got, tc.want)
+			t.Errorf("isOllamaEndpoint(%q) = %v, want %v", tc.endpoint, got, tc.want)
 		}
 	}
 }
@@ -59,7 +59,8 @@ func TestIsOllamaEndpoint(t *testing.T) {
 func TestCheckOpenAICompatible(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", r.Method)
+			t.Errorf("method = %s, want POST", r.Method)
+			return
 		}
 		var req struct {
 			Model    string `json:"model"`
@@ -68,13 +69,16 @@ func TestCheckOpenAICompatible(t *testing.T) {
 			} `json:"messages"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
+			t.Errorf("decode request: %v", err)
+			return
 		}
 		if req.Model != "local-model" {
-			t.Fatalf("model = %q, want local-model", req.Model)
+			t.Errorf("model = %q, want local-model", req.Model)
+			return
 		}
 		if len(req.Messages) != 1 || req.Messages[0].Content == "" {
-			t.Fatalf("missing prompt in request: %+v", req)
+			t.Errorf("missing prompt in request: %+v", req)
+			return
 		}
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"{\"safe\":true,\"reason\":\"echo only\"}"}}]}`))
 	}))
@@ -96,7 +100,8 @@ func TestCheckOpenAICompatible(t *testing.T) {
 func TestCheckOllama(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/chat" {
-			t.Fatalf("path = %s, want /api/chat", r.URL.Path)
+			t.Errorf("path = %s, want /api/chat", r.URL.Path)
+			return
 		}
 		_, _ = w.Write([]byte(`{"message":{"content":"{\"safe\":false,\"reason\":\"destructive delete\"}"}}`))
 	}))

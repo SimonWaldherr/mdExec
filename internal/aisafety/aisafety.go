@@ -68,7 +68,7 @@ func isOllamaEndpoint(endpoint string) bool {
 	if err != nil {
 		return false
 	}
-	return u.Path == "/api/chat" || u.Path == "/api/generate" || u.Port() == "11434"
+	return u.Path == "/api/chat" || u.Path == "/api/generate"
 }
 
 func checkOllama(ctx context.Context, opts Options, prompt string) (Decision, error) {
