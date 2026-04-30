@@ -79,7 +79,7 @@ func main() {
 	root.PersistentFlags().StringSliceVar(&flagPassEnv, "pass-env", []string{"CI", "HOME"}, "Env vars to pass into container")
 	root.PersistentFlags().StringSliceVar(&flagVars, "var", nil, "Set variable KEY=VALUE (replaces {{KEY}} and exports to env)")
 	root.PersistentFlags().IntVar(&flagTail, "tail", 5, "Number of lines to show in TUI output tail")
-	root.PersistentFlags().BoolVar(&flagAISafety, "ai-safety", false, "Use a local AI model to approve each task before execution")
+	root.PersistentFlags().BoolVar(&flagAISafety, "ai-safety", false, "Enable AI safety check to approve/block each task before execution using a local AI model")
 	root.PersistentFlags().StringVar(&flagAIProvider, "ai-provider", "auto", "Local AI API provider (auto|ollama|openai)")
 	root.PersistentFlags().StringVar(&flagAIURL, "ai-url", "", "Local AI HTTP endpoint (MDEXEC_AI_URL or empty for Ollama http://localhost:11434/api/chat)")
 	root.PersistentFlags().StringVar(&flagAIModel, "ai-model", "", "Local AI model name (or MDEXEC_AI_MODEL)")

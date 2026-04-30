@@ -56,15 +56,16 @@ func Check(ctx context.Context, opts Options, req Request) (Decision, error) {
 }
 
 func safetyPrompt(req Request) string {
-	return strings.TrimSpace(fmt.Sprintf(`You are reviewing a command extracted from a Markdown code block before it runs locally.
-Decide whether it is safe to execute on a developer workstation.
-Consider destructive file operations, privilege escalation, credential exposure, network downloads piped to shells, persistence, data exfiltration, and unexpected system changes.
-Return only compact JSON with this exact shape: {"safe":true|false,"reason":"short reason"}.
-
-Task: %s
-Language: %s
-Command:
-%s`, req.TaskName, req.Language, req.Code))
+	return fmt.Sprintf(
+		"You are reviewing a command extracted from a Markdown code block before it runs locally.\n"+
+			"Decide whether it is safe to execute on a developer workstation.\n"+
+			"Consider destructive file operations, privilege escalation, credential exposure, network downloads piped to shells, persistence, data exfiltration, and unexpected system changes.\n"+
+			"Return only compact JSON with this exact shape: {\"safe\":true|false,\"reason\":\"short reason\"}.\n\n"+
+			"Task: %s\nLanguage: %s\nCommand:\n%s",
+		req.TaskName,
+		req.Language,
+		req.Code,
+	)
 }
 
 func shouldUseOllama(provider, endpoint string) bool {
