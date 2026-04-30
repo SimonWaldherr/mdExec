@@ -47,6 +47,7 @@ func TestIsOllamaEndpoint(t *testing.T) {
 		{"http://localhost:11434/api/generate", true},
 		{"http://localhost:1234/v1/chat/completions", false},
 		{"http://localhost:1234/api/local/v1/chat/completions", false},
+		{"http://host11434.example/v1/chat/completions", false},
 	}
 	for _, tc := range tests {
 		if got := isOllamaEndpoint(tc.endpoint); got != tc.want {
