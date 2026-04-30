@@ -25,17 +25,14 @@ func TestExecuteTaskOrderBlocksUnsafeAIDecision(t *testing.T) {
 		Code: "echo should not run",
 	}}
 
-	_, err := executeTaskOrder(
-		context.Background(),
-		tasks,
-		policy.Default(),
-		nil,
-		executor.Options{AllowLevel: policy.RiskLow},
-		aisafety.Options{Enabled: true, Endpoint: server.URL + "/v1/chat/completions", Model: "local-model"},
-		true,
-		&strings.Builder{},
-		&strings.Builder{},
-	)
+	_, err := executeTaskOrder(context.Background(), tasks, executionConfig{
+		Policy: policy.Default(),
+		Run:    executor.Options{AllowLevel: policy.RiskLow},
+		AI:     aisafety.Options{Enabled: true, Endpoint: server.URL + "/v1/chat/completions", Model: "local-model"},
+		Yes:    true,
+		Out:    &strings.Builder{},
+		ErrOut: &strings.Builder{},
+	})
 	if err == nil {
 		t.Fatal("executeTaskOrder returned nil error, want AI safety block")
 	}

@@ -38,6 +38,23 @@ func TestParseDecision(t *testing.T) {
 	}
 }
 
+func TestIsOllamaEndpoint(t *testing.T) {
+	tests := []struct {
+		endpoint string
+		want     bool
+	}{
+		{"http://localhost:11434/api/chat", true},
+		{"http://localhost:11434/api/generate", true},
+		{"http://localhost:1234/v1/chat/completions", false},
+		{"http://localhost:1234/api/local/v1/chat/completions", false},
+	}
+	for _, tc := range tests {
+		if got := isOllamaEndpoint(tc.endpoint); got != tc.want {
+			t.Fatalf("isOllamaEndpoint(%q) = %v, want %v", tc.endpoint, got, tc.want)
+		}
+	}
+}
+
 func TestCheckOpenAICompatible(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

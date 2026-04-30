@@ -68,7 +68,7 @@ func isOllamaEndpoint(endpoint string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.Contains(u.Path, "/api/") || strings.Contains(u.Host, "11434")
+	return u.Path == "/api/chat" || u.Path == "/api/generate" || strings.Contains(u.Host, "11434")
 }
 
 func checkOllama(ctx context.Context, opts Options, prompt string) (Decision, error) {

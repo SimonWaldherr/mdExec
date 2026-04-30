@@ -215,7 +215,15 @@ func main() {
 				}
 				aiOpts := aiSafetyOptions()
 				ctx := context.Background()
-				failures, err := executeTaskOrder(ctx, order, pol, vars, opts, aiOpts, flagYes, os.Stdout, os.Stderr)
+				failures, err := executeTaskOrder(ctx, order, executionConfig{
+					Policy: pol,
+					Vars:   vars,
+					Run:    opts,
+					AI:     aiOpts,
+					Yes:    flagYes,
+					Out:    os.Stdout,
+					ErrOut: os.Stderr,
+				})
 				if err != nil {
 					return err
 				}
@@ -284,7 +292,15 @@ func main() {
 						UseContainer: flagUseContainer || flagImage != "" || flagEngine != "",
 					}
 					aiOpts := aiSafetyOptions()
-					failures, err := executeTaskOrder(context.Background(), order, pol, vars, opts, aiOpts, true, &outBuilder, &outBuilder)
+					failures, err := executeTaskOrder(context.Background(), order, executionConfig{
+						Policy: pol,
+						Vars:   vars,
+						Run:    opts,
+						AI:     aiOpts,
+						Yes:    true,
+						Out:    &outBuilder,
+						ErrOut: &outBuilder,
+					})
 					if err != nil {
 						return err
 					}
@@ -434,56 +450,66 @@ func isAllowed(risk, allow policy.RiskLevel) bool {
 	return order[risk] <= order[allow]
 }
 
+type executionConfig struct {
+	Policy *policy.Policy
+	Vars   map[string]string
+	Run    executor.Options
+	AI     aisafety.Options
+	Yes    bool
+	Out    io.Writer
+	ErrOut io.Writer
+}
+
 // executeTaskOrder runs tasks in the given order, writing stdout to out and stderr to errOut.
 // It returns the number of tasks that exited non-zero.
-func executeTaskOrder(ctx context.Context, order []*task.Task, pol *policy.Policy, vars map[string]string, opts executor.Options, aiOpts aisafety.Options, yes bool, out, errOut io.Writer) (int, error) {
+func executeTaskOrder(ctx context.Context, order []*task.Task, cfg executionConfig) (int, error) {
 	failures := 0
 	for _, t := range order {
-		score, reasons := pol.Score(t.Code)
+		score, reasons := cfg.Policy.Score(t.Code)
 		t.RiskScore = score
 		t.RiskReasons = reasons
-		risk := pol.Risk(score)
-		if !isAllowed(risk, opts.AllowLevel) {
-			if yes {
-				return failures, fmt.Errorf("task '%s' risk %s exceeds allowed level '%s' (use --allow %s)", t.Name, risk, opts.AllowLevel, risk)
+		risk := cfg.Policy.Risk(score)
+		if !isAllowed(risk, cfg.Run.AllowLevel) {
+			if cfg.Yes {
+				return failures, fmt.Errorf("task '%s' risk %s exceeds allowed level '%s' (use --allow %s)", t.Name, risk, cfg.Run.AllowLevel, risk)
 			}
-			fmt.Fprintf(out, "[blocked] %s: risk %s (%v). Increase --allow or run with --yes.\n", t.Label(), risk, strings.Join(reasons, "; "))
+			fmt.Fprintf(cfg.Out, "[blocked] %s: risk %s (%v). Increase --allow or run with --yes.\n", t.Label(), risk, strings.Join(reasons, "; "))
 			continue
 		}
-		if aiOpts.Enabled {
-			decision, err := aisafety.Check(ctx, aiOpts, aisafety.Request{TaskName: t.Name, Language: t.Lang, Code: t.Code})
+		if cfg.AI.Enabled {
+			decision, err := aisafety.Check(ctx, cfg.AI, aisafety.Request{TaskName: t.Name, Language: t.Lang, Code: t.Code})
 			if err != nil {
-				if yes {
+				if cfg.Yes {
 					return failures, fmt.Errorf("task '%s' AI safety check failed: %w", t.Name, err)
 				}
-				fmt.Fprintf(out, "[ai-error] %s: %v\n", t.Label(), err)
+				fmt.Fprintf(cfg.Out, "[ai-error] %s: %v\n", t.Label(), err)
 				continue
 			}
 			if !decision.Safe {
-				if yes {
+				if cfg.Yes {
 					return failures, fmt.Errorf("task '%s' blocked by AI safety check: %s", t.Name, decision.Reason)
 				}
-				fmt.Fprintf(out, "[ai-blocked] %s: %s\n", t.Label(), decision.Reason)
+				fmt.Fprintf(cfg.Out, "[ai-blocked] %s: %s\n", t.Label(), decision.Reason)
 				continue
 			}
-			if opts.Verbosity > 0 {
-				fmt.Fprintf(out, "[ai-safe] %s: %s\n", t.Label(), decision.Reason)
+			if cfg.Run.Verbosity > 0 {
+				fmt.Fprintf(cfg.Out, "[ai-safe] %s: %s\n", t.Label(), decision.Reason)
 			}
 		}
-		rc, stdout, stderr, err := executor.RunTask(ctx, t, pol, vars, opts)
+		rc, stdout, stderr, err := executor.RunTask(ctx, t, cfg.Policy, cfg.Vars, cfg.Run)
 		if err != nil {
 			return failures, err
 		}
 		if len(stdout) > 0 {
-			fmt.Fprint(out, stdout)
+			fmt.Fprint(cfg.Out, stdout)
 		}
 		if len(stderr) > 0 {
-			fmt.Fprint(errOut, stderr)
+			fmt.Fprint(cfg.ErrOut, stderr)
 		}
 		if rc != 0 {
 			failures++
 			if !t.Continue {
-				fmt.Fprintf(errOut, "[stop] task '%s' failed with exit code %d\n", t.Name, rc)
+				fmt.Fprintf(cfg.ErrOut, "[stop] task '%s' failed with exit code %d\n", t.Name, rc)
 				break
 			}
 		}
