@@ -150,7 +150,7 @@ Defaults are in `policy/mdexec.policy.yaml` under `default_sandbox`.
 
 See `policy/mdexec.policy.yaml` for whitelist and risk patterns. mdexec scores code and maps to risk levels (low/medium/high). Control allow level with `--allow low|medium|high`. If a task exceeds allowed risk, mdexec will block it unless you explicitly raise `--allow` (and pass `--yes` to execute).
 
-AI safety mode adds a local-model approval step before execution. It never sends code to a hosted service unless you point it there: set `--ai-safety --ai-model <model>` and optionally `--ai-url <endpoint>`. By default mdexec uses Ollama-compatible `http://localhost:11434/api/chat`; LM Studio, llmster, and other OpenAI-compatible local servers can be used with a `/v1/chat/completions` endpoint. `MDEXEC_AI_MODEL` and `MDEXEC_AI_URL` provide the same defaults via environment variables.
+AI safety mode adds a local-model approval step before execution. It never sends code to a hosted service unless you point it there: set `--ai-safety --ai-model <model>` and optionally `--ai-url <endpoint>`. By default mdexec uses Ollama-compatible `http://localhost:11434/api/chat`; LM Studio, llmster, and other OpenAI-compatible local servers can be used with `--ai-provider openai --ai-url <.../v1/chat/completions>`. `MDEXEC_AI_MODEL` and `MDEXEC_AI_URL` provide the same defaults via environment variables.
 
 ### Variables
 

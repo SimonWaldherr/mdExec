@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -40,18 +41,21 @@ func TestParseDecision(t *testing.T) {
 
 func TestIsOllamaEndpoint(t *testing.T) {
 	tests := []struct {
+		provider string
 		endpoint string
 		want     bool
 	}{
-		{"http://localhost:11434/api/chat", true},
-		{"http://localhost:11434/api/generate", true},
-		{"http://localhost:1234/v1/chat/completions", false},
-		{"http://localhost:1234/api/local/v1/chat/completions", false},
-		{"http://host11434.example/v1/chat/completions", false},
+		{"auto", "http://localhost:11434/api/chat", true},
+		{"auto", "http://localhost:11434/api/generate", true},
+		{"auto", "http://localhost:1234/v1/chat/completions", false},
+		{"auto", "http://localhost:1234/api/local/v1/chat/completions", false},
+		{"auto", "http://host11434.example/v1/chat/completions", false},
+		{"ollama", "http://localhost:1234/v1/chat/completions", true},
+		{"openai", "http://localhost:11434/api/chat", false},
 	}
 	for _, tc := range tests {
-		if got := isOllamaEndpoint(tc.endpoint); got != tc.want {
-			t.Errorf("isOllamaEndpoint(%q) = %v, want %v", tc.endpoint, got, tc.want)
+		if got := shouldUseOllama(tc.provider, tc.endpoint); got != tc.want {
+			t.Errorf("shouldUseOllama(%q, %q) = %v, want %v", tc.provider, tc.endpoint, got, tc.want)
 		}
 	}
 }
@@ -79,6 +83,12 @@ func TestCheckOpenAICompatible(t *testing.T) {
 		if len(req.Messages) != 1 || req.Messages[0].Content == "" {
 			t.Errorf("missing prompt in request: %+v", req)
 			return
+		}
+		for _, want := range []string{"Task: hello", "Language: bash", "echo hello"} {
+			if !strings.Contains(req.Messages[0].Content, want) {
+				t.Errorf("prompt %q does not contain %q", req.Messages[0].Content, want)
+				return
+			}
 		}
 		if _, err := w.Write([]byte(`{"choices":[{"message":{"content":"{\"safe\":true,\"reason\":\"echo only\"}"}}]}`)); err != nil {
 			t.Errorf("write response: %v", err)

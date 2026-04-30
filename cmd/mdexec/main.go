@@ -40,6 +40,7 @@ var (
 	flagVars         []string
 	flagTail         int
 	flagAISafety     bool
+	flagAIProvider   string
 	flagAIURL        string
 	flagAIModel      string
 	flagAITimeout    int
@@ -79,7 +80,8 @@ func main() {
 	root.PersistentFlags().StringSliceVar(&flagVars, "var", nil, "Set variable KEY=VALUE (replaces {{KEY}} and exports to env)")
 	root.PersistentFlags().IntVar(&flagTail, "tail", 5, "Number of lines to show in TUI output tail")
 	root.PersistentFlags().BoolVar(&flagAISafety, "ai-safety", false, "Use a local AI model to approve each task before execution")
-	root.PersistentFlags().StringVar(&flagAIURL, "ai-url", "", "Local AI HTTP endpoint (default: MDEXEC_AI_URL or Ollama http://localhost:11434/api/chat)")
+	root.PersistentFlags().StringVar(&flagAIProvider, "ai-provider", "auto", "Local AI API provider (auto|ollama|openai)")
+	root.PersistentFlags().StringVar(&flagAIURL, "ai-url", "", "Local AI HTTP endpoint (MDEXEC_AI_URL or empty for Ollama http://localhost:11434/api/chat)")
 	root.PersistentFlags().StringVar(&flagAIModel, "ai-model", "", "Local AI model name (or MDEXEC_AI_MODEL)")
 	root.PersistentFlags().IntVar(&flagAITimeout, "ai-timeout", 30, "AI safety request timeout seconds")
 
@@ -439,6 +441,7 @@ func parseAllow(s string) policy.RiskLevel {
 func aiSafetyOptions() aisafety.Options {
 	return aisafety.Options{
 		Enabled:  flagAISafety,
+		Provider: flagAIProvider,
 		Endpoint: flagAIURL,
 		Model:    flagAIModel,
 		Timeout:  time.Duration(flagAITimeout) * time.Second,

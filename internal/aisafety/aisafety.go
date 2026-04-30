@@ -19,6 +19,7 @@ const (
 
 type Options struct {
 	Enabled  bool
+	Provider string
 	Endpoint string
 	Model    string
 	Timeout  time.Duration
@@ -48,7 +49,7 @@ func Check(ctx context.Context, opts Options, req Request) (Decision, error) {
 		defer cancel()
 	}
 	prompt := safetyPrompt(req)
-	if isOllamaEndpoint(opts.Endpoint) {
+	if shouldUseOllama(opts.Provider, opts.Endpoint) {
 		return checkOllama(ctx, opts, prompt)
 	}
 	return checkOpenAICompatible(ctx, opts, prompt)
@@ -64,6 +65,16 @@ Task: %s
 Language: %s
 Command:
 %s`, req.TaskName, req.Language, req.Code))
+}
+
+func shouldUseOllama(provider, endpoint string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "ollama":
+		return true
+	case "openai", "openai-compatible", "lm-studio", "llmster":
+		return false
+	}
+	return isOllamaEndpoint(endpoint)
 }
 
 func isOllamaEndpoint(endpoint string) bool {
