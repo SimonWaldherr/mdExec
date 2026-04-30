@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SimonWaldherr/mdexec/internal/aisafety"
 	"github.com/SimonWaldherr/mdexec/internal/executor"
 	"github.com/SimonWaldherr/mdexec/internal/graph"
 	"github.com/SimonWaldherr/mdexec/internal/markdown"
@@ -38,6 +39,10 @@ var (
 	flagPassEnv      []string
 	flagVars         []string
 	flagTail         int
+	flagAISafety     bool
+	flagAIURL        string
+	flagAIModel      string
+	flagAITimeout    int
 )
 
 func main() {
@@ -54,6 +59,12 @@ func main() {
 			if flagAllow == "" {
 				flagAllow = "low"
 			}
+			if flagAIURL == "" {
+				flagAIURL = os.Getenv("MDEXEC_AI_URL")
+			}
+			if flagAIModel == "" {
+				flagAIModel = os.Getenv("MDEXEC_AI_MODEL")
+			}
 			return nil
 		},
 	}
@@ -67,6 +78,10 @@ func main() {
 	root.PersistentFlags().StringSliceVar(&flagPassEnv, "pass-env", []string{"CI", "HOME"}, "Env vars to pass into container")
 	root.PersistentFlags().StringSliceVar(&flagVars, "var", nil, "Set variable KEY=VALUE (replaces {{KEY}} and exports to env)")
 	root.PersistentFlags().IntVar(&flagTail, "tail", 5, "Number of lines to show in TUI output tail")
+	root.PersistentFlags().BoolVar(&flagAISafety, "ai-safety", false, "Use a local AI model to approve each task before execution")
+	root.PersistentFlags().StringVar(&flagAIURL, "ai-url", "", "Local AI HTTP endpoint (default: MDEXEC_AI_URL or Ollama http://localhost:11434/api/chat)")
+	root.PersistentFlags().StringVar(&flagAIModel, "ai-model", "", "Local AI model name (or MDEXEC_AI_MODEL)")
+	root.PersistentFlags().IntVar(&flagAITimeout, "ai-timeout", 30, "AI safety request timeout seconds")
 
 	// Common filter flags
 	addFilterFlags := func(c *cobra.Command) {
@@ -198,8 +213,9 @@ func main() {
 					IncludeAll:   flagIncludeAll,
 					UseContainer: flagUseContainer || flagImage != "" || flagEngine != "",
 				}
+				aiOpts := aiSafetyOptions()
 				ctx := context.Background()
-				failures, err := executeTaskOrder(ctx, order, pol, vars, opts, flagYes, os.Stdout, os.Stderr)
+				failures, err := executeTaskOrder(ctx, order, pol, vars, opts, aiOpts, flagYes, os.Stdout, os.Stderr)
 				if err != nil {
 					return err
 				}
@@ -267,7 +283,8 @@ func main() {
 						IncludeAll:   flagIncludeAll,
 						UseContainer: flagUseContainer || flagImage != "" || flagEngine != "",
 					}
-					failures, err := executeTaskOrder(context.Background(), order, pol, vars, opts, true, &outBuilder, &outBuilder)
+					aiOpts := aiSafetyOptions()
+					failures, err := executeTaskOrder(context.Background(), order, pol, vars, opts, aiOpts, true, &outBuilder, &outBuilder)
 					if err != nil {
 						return err
 					}
@@ -403,6 +420,15 @@ func parseAllow(s string) policy.RiskLevel {
 	}
 }
 
+func aiSafetyOptions() aisafety.Options {
+	return aisafety.Options{
+		Enabled:  flagAISafety,
+		Endpoint: flagAIURL,
+		Model:    flagAIModel,
+		Timeout:  time.Duration(flagAITimeout) * time.Second,
+	}
+}
+
 func isAllowed(risk, allow policy.RiskLevel) bool {
 	order := map[policy.RiskLevel]int{policy.RiskLow: 1, policy.RiskMedium: 2, policy.RiskHigh: 3}
 	return order[risk] <= order[allow]
@@ -410,7 +436,7 @@ func isAllowed(risk, allow policy.RiskLevel) bool {
 
 // executeTaskOrder runs tasks in the given order, writing stdout to out and stderr to errOut.
 // It returns the number of tasks that exited non-zero.
-func executeTaskOrder(ctx context.Context, order []*task.Task, pol *policy.Policy, vars map[string]string, opts executor.Options, yes bool, out, errOut io.Writer) (int, error) {
+func executeTaskOrder(ctx context.Context, order []*task.Task, pol *policy.Policy, vars map[string]string, opts executor.Options, aiOpts aisafety.Options, yes bool, out, errOut io.Writer) (int, error) {
 	failures := 0
 	for _, t := range order {
 		score, reasons := pol.Score(t.Code)
@@ -423,6 +449,26 @@ func executeTaskOrder(ctx context.Context, order []*task.Task, pol *policy.Polic
 			}
 			fmt.Fprintf(out, "[blocked] %s: risk %s (%v). Increase --allow or run with --yes.\n", t.Label(), risk, strings.Join(reasons, "; "))
 			continue
+		}
+		if aiOpts.Enabled {
+			decision, err := aisafety.Check(ctx, aiOpts, aisafety.Request{TaskName: t.Name, Language: t.Lang, Code: t.Code})
+			if err != nil {
+				if yes {
+					return failures, fmt.Errorf("task '%s' AI safety check failed: %w", t.Name, err)
+				}
+				fmt.Fprintf(out, "[ai-error] %s: %v\n", t.Label(), err)
+				continue
+			}
+			if !decision.Safe {
+				if yes {
+					return failures, fmt.Errorf("task '%s' blocked by AI safety check: %s", t.Name, decision.Reason)
+				}
+				fmt.Fprintf(out, "[ai-blocked] %s: %s\n", t.Label(), decision.Reason)
+				continue
+			}
+			if opts.Verbosity > 0 {
+				fmt.Fprintf(out, "[ai-safe] %s: %s\n", t.Label(), decision.Reason)
+			}
 		}
 		rc, stdout, stderr, err := executor.RunTask(ctx, t, pol, vars, opts)
 		if err != nil {
